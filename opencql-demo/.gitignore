@@ -1,18 +1,8 @@
-# Never commit secrets
 .streamlit/secrets.toml
-
-# Python
+.env
 __pycache__/
 *.pyc
-*.pyo
 .venv/
 venv/
 *.egg-info/
-
-# OS
 .DS_Store
-Thumbs.db
-
-# Local dev only
-.env
-*.local

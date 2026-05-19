@@ -1,0 +1,102 @@
+// OpenCQL Grammar v2
+
+start: statement+
+
+statement: context_def
+         | infer_stmt
+         | query_stmt
+
+context_def: "CONTEXT" CNAME "AS" "(" context_body ")" -> context_def
+
+context_body: context_clause+
+
+context_clause: retrieve_clause
+              | join_clause
+              | filter_clause
+              | partition_clause
+              | limit_clause
+              | history_clause
+              | system_clause
+
+retrieve_clause: "RETRIEVE" "FROM" source_ref retrieve_opts? -> retrieve_clause
+
+source_ref: CNAME ("." CNAME)* -> source_ref
+
+retrieve_opts: retrieve_opt+
+
+retrieve_opt: "WHERE" condition        -> retrieve_where
+            | "TOP" INTEGER            -> retrieve_top
+            | "LIMIT" "TOKENS" INTEGER -> retrieve_token_limit
+
+join_clause: "JOIN" source_ref join_type? "ON" CNAME -> join_clause
+
+join_type: "SEMANTIC" -> semantic_join
+         | "EXACT"    -> exact_join
+
+filter_clause: "FILTER" "BY" condition -> filter_clause
+
+partition_clause: "PARTITION" "BY" CNAME "(" value_list ")" -> partition_clause
+                | "PARTITION" "BY" CNAME "AUTO"             -> partition_auto
+
+limit_clause: "LIMIT" "TOKENS" INTEGER -> limit_tokens
+            | "LIMIT" "CHUNKS" INTEGER -> limit_chunks
+
+history_clause: "INJECT" "HISTORY" "LAST" INTEGER "TURNS"  -> history_last_n
+              | "INJECT" "HISTORY" "(" tuple_list ")"       -> history_explicit
+
+system_clause: "WITH" "SYSTEM" value -> system_clause
+
+infer_stmt: "INFER" infer_opts -> infer_stmt
+
+infer_opts: infer_opt+
+
+infer_opt: "WITH" "MODEL" "=" value          -> infer_model
+         | "USING" "CONTEXT" CNAME           -> infer_context
+         | "GOAL" value                      -> infer_goal
+         | "AGGREGATE" "BY" value            -> infer_aggregate
+         | "TEMPERATURE" "=" number          -> infer_temperature
+         | "MAX" "TOKENS" "=" INTEGER        -> infer_max_tokens
+         | "FORMAT" "=" value                -> infer_format
+         | "EXPLAIN"                         -> infer_explain
+
+query_stmt: "SELECT" CNAME "FROM" CNAME legacy_clause* -> query_stmt
+
+legacy_clause: "WITH" "SYSTEM" "(" kv_list ")"          -> with_system
+             | "JOIN" "KNOWLEDGE" "(" kv_list ")"        -> join_knowledge
+             | "INJECT" "HISTORY" "(" tuple_list ")"     -> inject_history
+             | "GROUP" "BY" CNAME "(" value_list ")"     -> group_by
+             | "AGGREGATE" "WITH" value                  -> aggregate_with
+             | "WHERE" kv_list                           -> where_clause
+
+condition: CNAME op value (("AND" | "OR") condition)? -> condition
+
+op: ">"  -> gt
+  | "<"  -> lt
+  | ">=" -> gte
+  | "<=" -> lte
+  | "="  -> eq
+  | "!=" -> neq
+  | "CONTAINS" -> contains
+
+kv_list: kv_pair ("," kv_pair)*
+kv_pair: CNAME "=" value
+
+value_list: value ("," value)*
+tuple_list: tuple_item ("," tuple_item)*
+tuple_item: "(" value "," value ")"
+
+value: STRING
+     | number
+     | "@" CNAME -> variable
+     | CNAME     -> identifier
+
+number: SIGNED_NUMBER -> number
+
+STRING: ESCAPED_STRING
+INTEGER: /[0-9]+/
+
+%import common.CNAME
+%import common.ESCAPED_STRING
+%import common.SIGNED_NUMBER
+%import common.WS
+%ignore WS
