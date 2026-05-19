@@ -192,6 +192,56 @@ def _litm_analysis(chunks: list[dict]) -> list[dict]:
     return warnings
 
 
+
+def _word_sim(t1: str, t2: str) -> float:
+    """Word-overlap Jaccard similarity (4+ char words)."""
+    a = set(re.findall(r"[a-z]{4,}", t1.lower()))
+    b = set(re.findall(r"[a-z]{4,}", t2.lower()))
+    return round(len(a & b) / len(a | b), 3) if (a | b) else 0.0
+
+
+def _compute_eta(chunks: list[dict]) -> float:
+    """
+    η (Eta) — Semantic Redundancy
+    η = |{(i,j) : word_sim(cᵢ,cⱼ) > 0.70}| / C(n,2)
+    Fraction of chunk pairs that are near-duplicates.
+    """
+    n = len(chunks)
+    if n < 2:
+        return 0.0
+    total_pairs = n * (n - 1) // 2
+    redundant = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            if _word_sim(chunks[i].get("text",""), chunks[j].get("text","")) > 0.60:
+                redundant += 1
+    return round(redundant / total_pairs, 3) if total_pairs > 0 else 0.0
+
+
+def _compute_sigma(chunks: list[dict], max_age_days: "int | None" = None) -> float:
+    """
+    σ (Sigma) — Staleness
+    σ = |{c : c.age_days > threshold}| / n
+    Fraction of chunks older than threshold. Falls back to version-mixing detection.
+    """
+    n = len(chunks)
+    if n == 0:
+        return 0.0
+    if max_age_days is not None:
+        stale = sum(
+            1 for c in chunks
+            if isinstance(c.get("age_days"), (int, float)) and c["age_days"] > max_age_days
+        )
+        return round(stale / n, 3)
+    # Version-mixing fallback: old versions in context = stale content
+    versions = [c.get("ver") for c in chunks if c.get("ver")]
+    if len(versions) >= 2 and len(set(versions)) > 1:
+        newest = max(set(versions))
+        old_count = sum(1 for c in chunks if c.get("ver") and c["ver"] != newest)
+        return round(old_count / n, 3)
+    return 0.0
+
+
 # ── Report ────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -217,6 +267,8 @@ class InspectReport:
     tau:              float
     delta:            int
     kappa:            float
+    eta:              float
+    sigma:            float
     status:           str
     latency_ms:       float
     tokens_used:      int
@@ -230,7 +282,8 @@ class InspectReport:
         return (
             f"InspectReport("
             f"rho={self.rho}, tau={self.tau}, delta={self.delta}, "
-            f"kappa={self.kappa}, status='{self.status}')"
+            f"kappa={self.kappa}, eta={self.eta}, sigma={self.sigma}, "
+            f"status='{self.status}')"
         )
 
     def to_dict(self) -> dict:
@@ -239,6 +292,8 @@ class InspectReport:
             "tau":              self.tau,
             "delta":            self.delta,
             "kappa":            self.kappa,
+            "eta":              self.eta,
+            "sigma":            self.sigma,
             "status":           self.status,
             "latency_ms":       self.latency_ms,
             "tokens_used":      self.tokens_used,
@@ -297,10 +352,16 @@ class ContextInspector:
         contradiction_strategy: str = "keyword",
         warn_tau_threshold: float = 0.95,
         warn_kappa_threshold: float = 0.3,
+        warn_eta_threshold: float = 0.30,
+        warn_sigma_threshold: float = 0.30,
+        max_age_days: "int | None" = None,
     ):
         self.contradiction_strategy = contradiction_strategy
         self.warn_tau_threshold     = warn_tau_threshold
         self.warn_kappa_threshold   = warn_kappa_threshold
+        self.warn_eta_threshold     = warn_eta_threshold
+        self.warn_sigma_threshold   = warn_sigma_threshold
+        self.max_age_days           = max_age_days
 
     def inspect(
         self,
@@ -335,6 +396,8 @@ class ContextInspector:
         tau   = _compute_tau(chunks, token_budget)
         delta = _compute_delta(chunks, sources_expected)
         kappa = _compute_kappa(chunks, self.contradiction_strategy)
+        eta   = _compute_eta(chunks)
+        sigma = _compute_sigma(chunks, getattr(self, "max_age_days", None))
 
         # Compute token usage
         tokens_used = sum(_count_tokens(c.get("text", "")) for c in chunks)
@@ -383,6 +446,22 @@ class ContextInspector:
                 "message": f"Coverage ρ={rho:.3f} is low. Consider lowering WHERE similarity threshold.",
             })
 
+        # Semantic redundancy warning
+        if eta > 0.30:
+            warnings.append({
+                "type":    "P6_REDUNDANCY",
+                "eta":     eta,
+                "message": f"Semantic redundancy η={eta:.3f}. {int(eta * len(chunks)*(len(chunks)-1)//2)} near-duplicate chunk pairs. Consider deduplication.",
+            })
+
+        # Staleness warning
+        if sigma > 0.30:
+            warnings.append({
+                "type":    "P7_STALENESS",
+                "sigma":   sigma,
+                "message": f"Staleness σ={sigma:.3f}. {int(sigma*len(chunks))}/{len(chunks)} chunks are outdated. Use FILTER BY to exclude old versions.",
+            })
+
         # LITM analysis
         litm_warnings = _litm_analysis(chunks)
         warnings.extend(litm_warnings)
@@ -390,7 +469,7 @@ class ContextInspector:
         latency_ms = round((time.perf_counter() - t0) * 1000, 2)
 
         return InspectReport(
-            rho=rho, tau=tau, delta=delta, kappa=kappa,
+            rho=rho, tau=tau, delta=delta, kappa=kappa, eta=eta, sigma=sigma,
             status=status, latency_ms=latency_ms,
             tokens_used=tokens_used, token_budget=token_budget,
             sources_admitted=sources_admitted,
