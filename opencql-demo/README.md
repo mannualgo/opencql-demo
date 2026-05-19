@@ -1,7 +1,7 @@
 # OpenCQL — Context Quality Demo
 
 Pre-inference context quality inspection for RAG pipelines.  
-Live demo: [your-app.streamlit.app](https://share.streamlit.io)
+Live demo: https://opencql-demo.streamlit.app/
 
 ## Deploy to Streamlit Cloud (5 minutes)
 
